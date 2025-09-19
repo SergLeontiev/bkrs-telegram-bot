@@ -61,6 +61,11 @@ class ChineseDictionaryBot:
     def format_output(self, result: Tuple[str, str, str]) -> str:
         """Форматирование вывода: иероглифы, пиньинь, перевод"""
         hanzi, pinyin, translation = result
+        
+        # Заменяем \n на настоящие переносы строк
+        if translation:
+            translation = translation.replace('\\n', '\n')
+        
         return f"{hanzi}\n{pinyin}\n{translation}"
 
 # Создание экземпляра бота
@@ -77,8 +82,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Пример: 你好"
     )
 
+async def bkrs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /bkrs для поиска в групповых чатах"""
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: /bkrs иероглифы\n"
+            "Пример: /bkrs 你好"
+        )
+        return
+    
+    # Объединяем все аргументы в одну строку
+    chinese_input = ' '.join(context.args).strip()
+    
+    result = bot_dict.lookup(chinese_input)
+    
+    if result:
+        translation = bot_dict.format_output(result)
+        await update.message.reply_text(translation)
+    else:
+        await update.message.reply_text(f"Слово '{chinese_input}' не найдено")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка сообщений"""
+    """Обработка сообщений (только в личных чатах)"""
+    # Работает только в личных сообщениях
+    if update.message.chat.type != 'private':
+        return
+        
     chinese_input = update.message.text.strip()
     
     result = bot_dict.lookup(chinese_input)
@@ -105,6 +134,7 @@ def main():
     application = Application.builder().token(token).build()
     
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("bkrs", bkrs_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("Бот запущен...")

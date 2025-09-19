@@ -30,6 +30,11 @@ class ChineseDictionary:
     def format_output(self, result: Tuple[str, str, str]) -> str:
         """Форматирование вывода: иероглифы, пиньинь, перевод"""
         hanzi, pinyin, translation = result
+        
+        # Заменяем \n на настоящие переносы строк
+        if translation:
+            translation = translation.replace('\\n', '\n')
+        
         return f"{hanzi}\n{pinyin}\n{translation}"
 
 def main():
