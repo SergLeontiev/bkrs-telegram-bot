@@ -3,9 +3,14 @@
 
 import os
 import sqlite3
-from typing import Optional, Tuple
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
+from typing import Optional, Tuple, Dict
+from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, InlineQueryHandler
+import uuid
+
+# Словарь для хранения задач debouncing по пользователям
+user_search_tasks: Dict[int, asyncio.Task] = {}
 
 def assemble_database_if_needed():
     """Собирает базу из частей если нужно"""
@@ -102,6 +107,73 @@ async def bkrs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"Слово '{chinese_input}' не найдено")
 
+async def perform_search(query: str, inline_query_id: str, user_id: int):
+    """Выполняет поиск с задержкой"""
+    try:
+        # Ждем 500ms перед поиском
+        await asyncio.sleep(0.5)
+        
+        # Ищем слово в базе
+        result = bot_dict.lookup(query)
+        
+        if result:
+            hanzi, pinyin, translation = result
+            # Заменяем \n на настоящие переносы строк
+            if translation:
+                translation = translation.replace('\\n', '\n')
+            
+            formatted_result = f"{hanzi}\n{pinyin}\n{translation}"
+            
+            results = [
+                InlineQueryResultArticle(
+                    id=str(uuid.uuid4()),
+                    title=f"{hanzi}",
+                    description=f"{pinyin} - {translation[:50]}{'...' if len(translation) > 50 else ''}",
+                    input_message_content=InputTextMessageContent(formatted_result)
+                )
+            ]
+        else:
+            # Пустой результат если не найдено
+            results = []
+        
+        # Отправляем результат (может не сработать если запрос устарел)
+        try:
+            from telegram import Bot
+            bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN'))
+            await bot.answer_inline_query(inline_query_id, results)
+        except:
+            # Игнорируем ошибки (запрос мог устареть)
+            pass
+            
+    except asyncio.CancelledError:
+        # Задача была отменена (пользователь продолжил печатать)
+        pass
+    finally:
+        # Убираем задачу из словаря
+        if user_id in user_search_tasks:
+            del user_search_tasks[user_id]
+
+async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка inline запросов (@bkrs_leo_bot слово) с debouncing"""
+    query = update.inline_query.query.strip()
+    user_id = update.inline_query.from_user.id
+    inline_query_id = update.inline_query.id
+    
+    # Отменяем предыдущую задачу поиска для этого пользователя
+    if user_id in user_search_tasks:
+        user_search_tasks[user_id].cancel()
+    
+    if not query:
+        # Пустой запрос - очищаем результаты
+        await update.inline_query.answer([])
+        return
+    
+    # Создаем новую задачу поиска с задержкой
+    search_task = asyncio.create_task(
+        perform_search(query, inline_query_id, user_id)
+    )
+    user_search_tasks[user_id] = search_task
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка сообщений (только в личных чатах)"""
     # Работает только в личных сообщениях
@@ -135,6 +207,7 @@ def main():
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("bkrs", bkrs_command))
+    application.add_handler(InlineQueryHandler(inline_query))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("Бот запущен...")
